@@ -2,9 +2,12 @@
 #include <Windows.h>
 #include <fwpmu.h>
 #include <stdio.h>
-#include <locale.h>
+#include <AccCtrl.h>
+#include <AclAPI.h>
 
 #pragma comment(lib, "fwpuclnt.lib")
+#pragma comment(lib, "advapi32.lib")
+
 
 #define EXIT_ON_ERROR(fnName)\
 	if(result != ERROR_SUCCESS)\
@@ -13,7 +16,7 @@
 		goto CLEANUP;\
 	}
 
-// GUID для провайдера.
+// 5fb216a8-e2e8-4024-b853-391a4168641e
 const GUID PROVIDER_KEY =
 {
     0x5fb216a8,
@@ -22,46 +25,14 @@ const GUID PROVIDER_KEY =
     {0xb8, 0x53, 0x39, 0x1a, 0x41, 0x68, 0x64, 0x1e }
 };
 
-// GUID для подслоя.
-const GUID SUBLAYER_KEY_PORT_REDIRECT =
-{
-    0xc551d347,
-    0xf563,
-    0x4b7f,
-    {0xb7, 0x41, 0x77, 0x96, 0xe7, 0x24, 0x4f, 0x20 }
-};
+#define SESSION_NAME "SDK Examples"
 
-#define SESSION_NAME L"SDK Examples Port Redirect"
+// GUIDs for the sublayers (you can generate your own or use placeholders)
+const GUID SUBLAYER_NAT_4500_TO_450_KEY = { 0x12345678, 0x1111, 0x2222, {0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA} };
+const GUID SUBLAYER_NAT_500_TO_50_KEY = { 0xABCD1234, 0x5555, 0x6666, {0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE} };
 
-// GUIDs для правил NAT
-const GUID NAT_RULE_KEY_4500_TO_450 =
-{
-    0x11111111, 0x2222, 0x3333, {0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb}
-};
 
-const GUID NAT_RULE_KEY_500_TO_50 =
-{
-    0xcccccccc, 0xdddd, 0xeeee, {0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16}
-};
-
-// GUIDs для фильтров, которые будут использовать правила NAT
-const GUID FILTER_KEY_4500_TO_450 =
-{
-    0xc0e1d2f3,
-    0xa4b5,
-    0x6c7d,
-    {0x8e, 0x9f, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f}
-};
-
-const GUID FILTER_KEY_500_TO_50 =
-{
-    0x12345678,
-    0xabcd,
-    0xef01,
-    {0x23, 0x45, 0x67, 0x89, 0x0a, 0xbc, 0xde, 0xf0}
-};
-
-DWORD InstallProviderAndSublayer
+DWORD Install
 (
     __in const GUID* providerKey,
     __in PCWSTR providerName,
@@ -98,11 +69,10 @@ DWORD InstallProviderAndSublayer
     sublayer.displayData.name = (PWSTR)subLayerName;
     sublayer.flags = FWPM_SUBLAYER_FLAG_PERSISTENT;
     sublayer.providerKey = (GUID*)providerKey;
-    sublayer.weight = 0x8000;
+    sublayer.weight = 0x8000; // Example weight, adjust as needed
 
     result = FwpmSubLayerAdd0(engine, &sublayer, NULL);
     if (result != FWP_E_ALREADY_EXISTS)EXIT_ON_ERROR(FwpmSubLayerAdd0);
-
     result = FwpmTransactionCommit0(engine);
     EXIT_ON_ERROR(FwpmTransactionCommit0);
 
@@ -112,7 +82,7 @@ CLEANUP:
     return result;
 }
 
-DWORD UninstallProviderAndSublayer
+DWORD Uninstall
 (
     __in const GUID* providerKey,
     __in const GUID* subLayerKey
@@ -147,129 +117,147 @@ CLEANUP:
     return result;
 }
 
-DWORD AddPortRedirectNATRule
-(
+// Function to add NAT rules for port translation
+DWORD AddNatRule(
     __in HANDLE engine,
-    __in const GUID* natRuleKey,
-    __in UINT16 currentPort,
-    __in UINT16 redirectPort,
-    __in const GUID* subLayerKey
-)
-{
-    DWORD result = ERROR_SUCCESS;
-    FWPM_NAT_ENTRY2 natEntry; // Используем FWPM_NAT_ENTRY2
-    FWPM_NAT_TRANSFORM_V4 transform;
-
-    memset(&natEntry, 0, sizeof(natEntry));
-    natEntry.natEntryKey = *natRuleKey;
-    natEntry.providerKey = PROVIDER_KEY;
-    natEntry.subLayerKey = *subLayerKey;
-    natEntry.flags = FWPM_NAT_ENTRY_FLAG_ENABLE;
-
-    // Указываем тип NAT: FWPM_NAT_TYPE_INBOUND для перенаправления входящего трафика
-    natEntry.natType = FWPM_NAT_TYPE_INBOUND;
-
-    // Настройка оригинальной информации
-    memset(&transform, 0, sizeof(transform));
-    transform.port = currentPort;
-    transform.address.type = FWPM_IP_TYPE_V4; // IPv4
-    // transform.address.addrV4.value = 0; // 0 означает использовать исходный IP-адрес
-
-    natEntry.originalTransform = transform;
-
-    // Настройка переведенной информации
-    memset(&transform, 0, sizeof(transform));
-    transform.port = redirectPort;
-    transform.address.type = FWPM_IP_TYPE_V4; // IPv4
-    transform.address.addrV4.value = 0; // 0 означает использовать исходный IP-адрес
-
-    natEntry.translatedTransform = transform;
-
-    result = FwpmNatAdd2(engine, &natEntry, NULL); // Используем FwpmNatAdd2
-    if (result != FWP_E_ALREADY_EXISTS)
-    {
-        EXIT_ON_ERROR(FwpmNatAdd2);
-    }
-
-    return result;
-}
-
-DWORD RemovePortRedirectNATRule
-(
-    __in HANDLE engine,
-    __in const GUID* natRuleKey
-)
-{
-    DWORD result = ERROR_SUCCESS;
-
-    result = FwpmNatDeleteByKey0(engine, natRuleKey);
-    if (result != FWP_E_NAT_ENTRY_NOT_FOUND)
-    {
-        EXIT_ON_ERROR(FwpmNatDeleteByKey0);
-    }
-
-    return result;
-}
-
-DWORD AddFilterForNATRule
-(
-    __in HANDLE engine,
-    __in const GUID* filterKey,
-    __in UINT16 portToFilter,
-    __in const GUID* natRuleKey, // Не используется напрямую для связи, но полезно для идентификации
-    __in const GUID* subLayerKey
+    __in const GUID* subLayerKey,
+    __in UINT16 portToTranslate,
+    __in UINT16 translatedPort,
+    __in PCWSTR ruleName
 )
 {
     DWORD result = ERROR_SUCCESS;
     FWPM_FILTER0 filter;
-    FWPM_FILTER_CONDITION0 condition;
+    FWPM_ACTION0 action;
+    FWPM_CONDITION0 condition; // Корректно объявлена здесь
+    // FWPM_IP_VERSION_KEYWORD_VALUE ipVersion = FWPM_IP_VERSION_ANY; // Удалено
+    // FWPM_SERVICE_MAIN_MENU_KEYWORD_VALUE service = FWPM_SERVICE_TCP; // Удалено
 
     memset(&filter, 0, sizeof(filter));
-    filter.filterKey = *filterKey;
-    filter.displayData.name = (PWSTR)L"Filter for NAT";
-    filter.layerKey = FWPM_LAYER_INBOUND_TRANSPORT_V4; // Слой для входящих транспортных пакетов
     filter.subLayerKey = *subLayerKey;
-    filter.weight = 100;
+    filter.displayData.name = (PWSTR)ruleName;
+    filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4; // Для исходящих TCP-подключений.
+    // Для UDP может потребоваться другой слой.
+    filter.action.type = FWPM_ACTION_PERMIT; // Будет переопределено NAT
 
-    // Настройка условия: пакеты, идущие на конкретный порт
+    // Condition for the specific port
     memset(&condition, 0, sizeof(condition));
-    condition.fieldKey = FWPM_CONDITION_IP_LOCAL_PORT; // Проверяем локальный порт
-    condition.matchType = FWPM_MATCH_EQUAL;
-    condition.u.port.range.start = portToFilter;
-    condition.u.port.range.end = portToFilter;
+    condition.fieldKey = FWPM_CONDITION_PORT;
+    condition.op = FWPM_CONDITION_OP_EQUAL;
+    condition.type = FWPM_CONDITION_TYPE_UINT16;
+    condition.value.uint16 = portToTranslate;
+    filter.numConditions = 1;
+    filter.conditions = &condition;
 
-    filter.numFilterConditions = 1;
-    filter.filterCondition = &condition;
+    // NAT Action
+    memset(&action, 0, sizeof(action));
+    action.type = FWPM_ACTION_NAT;
+    FWPM_NAT_TRAVERSAL0 natTraversal;
+    memset(&natTraversal, 0, sizeof(natTraversal));
+    natTraversal.natDirection = FWPM_NAT_DIRECTION_OUTBOUND;
+    natTraversal.localAddress.type = FWPM_IP_ADDRESS_TYPE_UNSPECIFIED;
+    natTraversal.remoteAddress.type = FWPM_IP_ADDRESS_TYPE_UNSPECIFIED;
+    natTraversal.localPort = translatedPort;
+    natTraversal.remotePort = translatedPort;
 
-    // Действие фильтра - разрешить пакету пройти, чтобы WFP мог применить NAT правило
-    filter.action.type = FWPM_ACTION_PERMIT;
+    action.nat = &natTraversal;
+    filter.action = action;
 
     result = FwpmFilterAdd0(engine, &filter, NULL, NULL);
-    if (result != FWP_E_ALREADY_EXISTS)
+    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS)
     {
-        EXIT_ON_ERROR(FwpmFilterAdd0);
+        printf("Failed to add NAT rule for port %u to %u: 0x%08x\n", portToTranslate, translatedPort, result);
     }
-
+    else if (result == FWP_E_ALREADY_EXISTS)
+    {
+        printf("NAT rule for port %u to %u already exists.\n", portToTranslate, translatedPort);
+    }
+    else
+    {
+        printf("Successfully added NAT rule for port %u to %u.\n", portToTranslate, translatedPort);
+    }
     return result;
 }
 
-DWORD RemoveFilterForNATRule
-(
+// Function to delete NAT rules for port translation
+DWORD DeleteNatRule(
     __in HANDLE engine,
-    __in const GUID* filterKey
+    __in const GUID* subLayerKey,
+    __in UINT16 portToTranslate,
+    __in PCWSTR ruleName
 )
 {
     DWORD result = ERROR_SUCCESS;
+    FWPM_FILTER_ENUM_TEMPLATE0 enumTemplate;
+    FWPM_FILTER0* filters = NULL;
+    UINT32 numFilters = 0;
 
-    result = FwpmFilterDeleteByKey0(engine, filterKey);
-    if (result != FWP_E_FILTER_NOT_FOUND)
+    memset(&enumTemplate, 0, sizeof(enumTemplate));
+    enumTemplate.layerKey.age = 0; // Match any layer
+    enumTemplate.layerKey.id = FWPM_LAYER_ALE_AUTH_CONNECT_V4; // Specific layer for outbound NAT
+    enumTemplate.subLayerKey = subLayerKey;
+    enumTemplate.displayData.name = (PWSTR)ruleName;
+
+    result = FwpmFilterEnumSummary0(engine, &enumTemplate, &filters, &numFilters);
+    if (result == ERROR_SUCCESS && numFilters > 0)
     {
-        EXIT_ON_ERROR(FwpmFilterDeleteByKey0);
+        for (UINT32 i = 0; i < numFilters; ++i)
+        {
+            // Find the filter that matches the port
+            bool portMatch = false;
+            for (UINT32 j = 0; j < filters[i].numConditions; ++j)
+            {
+                if (filters[i].conditions[j].fieldKey == FWPM_CONDITION_PORT &&
+                    filters[i].conditions[j].type == FWPM_CONDITION_TYPE_UINT16 &&
+                    filters[i].conditions[j].value.uint16 == portToTranslate)
+                {
+                    portMatch = true;
+                    break;
+                }
+            }
+
+            if (portMatch)
+            {
+                result = FwpmFilterDeleteById0(engine, filters[i].filterId);
+                if (result != ERROR_SUCCESS && result != FWP_E_FILTER_NOT_FOUND)
+                {
+                    printf("Failed to delete NAT rule for port %u: 0x%08x\n", portToTranslate, result);
+                }
+                else if (result == FWP_E_FILTER_NOT_FOUND)
+                {
+                    printf("NAT rule for port %u not found for deletion.\n", portToTranslate);
+                }
+                else
+                {
+                    printf("Successfully deleted NAT rule for port %u.\n", portToTranslate);
+                }
+            }
+        }
+    }
+    else if (result == FWP_E_NO_MORE_ITEMS)
+    {
+        printf("No NAT rules found for port %u.\n", portToTranslate);
+    }
+    else if (result != ERROR_SUCCESS)
+    {
+        printf("Error enumerating NAT filters: 0x%08x\n", result);
+    }
+
+
+    if (filters)
+    {
+        FwpmFreeMemory0((void**)&filters);
     }
 
     return result;
 }
 
+// Helper to create a display name for NAT rules
+PCWSTR GetNatRuleName(UINT16 port, UINT16 translatedPort, LPWSTR buffer, SIZE_T bufferSize)
+{
+    swprintf_s(buffer, bufferSize, L"NAT %u to %u", port, translatedPort);
+    return buffer;
+}
 
 void main()
 {
@@ -280,21 +268,7 @@ void main()
     HANDLE engine = NULL;
     FWPM_SESSION0 session;
 
-    // 1. Установка провайдера и подслоя
-    wcout << L"Установка провайдера и подслоя..." << endl;
-    result = InstallProviderAndSublayer(
-        &PROVIDER_KEY,
-        L"Port Redirect Provider",
-        &SUBLAYER_KEY_PORT_REDIRECT,
-        L"Port Redirect Sublayer"
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS) {
-        wcout << L"Ошибка при установке провайдера/подслоя: 0x" << hex << result << endl;
-        return;
-    }
-    wcout << L"Провайдер и подслой установлены." << endl;
-
-    // Открытие движка WFP для добавления правил
+    // Initialize FWP engine
     memset(&session, 0, sizeof(session));
     session.displayData.name = (wchar_t*)SESSION_NAME;
     session.txnWaitTimeoutInMSec = INFINITE;
@@ -302,127 +276,68 @@ void main()
     result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_CLOUD_AP, NULL, &session, &engine);
     EXIT_ON_ERROR(FwpmEngineOpen0);
 
-    // 2. Добавление правил NAT и соответствующих фильтров
-    wcout << L"Добавление правил NAT и фильтров..." << endl;
+    // --- Install Sublayers for NAT ---
+    // Sublayer for translating port 4500 to 450
+    result = Install(&PROVIDER_KEY, L"SDK Provider", &SUBLAYER_NAT_4500_TO_450_KEY, L"SDK NAT Sublayer 4500->450");
+    EXIT_ON_ERROR(Install);
 
-    // --- Перенаправление 4500 -> 450 ---
-    // Правило NAT
-    result = AddPortRedirectNATRule(
-        engine,
-        &NAT_RULE_KEY_4500_TO_450,
-        4500, // Текущий порт
-        450,  // Порт назначения
-        &SUBLAYER_KEY_PORT_REDIRECT
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS) {
-        wcout << L"Ошибка при добавлении правила NAT 4500->450: 0x" << hex << result << endl;
-        goto CLEANUP;
-    }
-    wcout << L"Правило NAT 4500->450 добавлено." << endl;
+    // Sublayer for translating port 500 to 50
+    result = Install(&PROVIDER_KEY, L"SDK Provider", &SUBLAYER_NAT_500_TO_50_KEY, L"SDK NAT Sublayer 500->50");
+    EXIT_ON_ERROR(Install);
 
-    // Фильтр для этого правила NAT
-    result = AddFilterForNATRule(
-        engine,
-        &FILTER_KEY_4500_TO_450,
-        4500, // Порт, который будет проверять фильтр
-        &NAT_RULE_KEY_4500_TO_450,
-        &SUBLAYER_KEY_PORT_REDIRECT
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS) {
-        wcout << L"Ошибка при добавлении фильтра для NAT 4500->450: 0x" << hex << result << endl;
-        goto CLEANUP;
-    }
-    wcout << L"Фильтр для NAT 4500->450 добавлен." << endl;
+    // --- Add NAT Rules ---
+    // Translate port 4500 to 450 (TCP)
+    LPWSTR natRuleName1 = L"NAT Rule 4500 to 450 TCP";
+    result = AddNatRule(engine, &SUBLAYER_NAT_4500_TO_450_KEY, 4500, 450, natRuleName1);
+    EXIT_ON_ERROR(AddNatRule);
 
+    // Translate port 4500 to 450 (UDP) - If needed, you'd need to create a separate sublayer or filter for UDP
+    // For simplicity, we'll assume TCP here. You might need to adjust the FWPM_SERVICE_MAIN_MENU_KEYWORD_VALUE in AddNatRule.
 
-    // --- Перенаправление 500 -> 50 ---
-    // Правило NAT
-    result = AddPortRedirectNATRule(
-        engine,
-        &NAT_RULE_KEY_500_TO_50,
-        500,  // Текущий порт
-        50,   // Порт назначения
-        &SUBLAYER_KEY_PORT_REDIRECT
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS) {
-        wcout << L"Ошибка при добавлении правила NAT 500->50: 0x" << hex << result << endl;
-        goto CLEANUP;
-    }
-    wcout << L"Правило NAT 500->50 добавлено." << endl;
+    // Translate port 500 to 50 (TCP)
+    LPWSTR natRuleName2 = L"NAT Rule 500 to 50 TCP";
+    result = AddNatRule(engine, &SUBLAYER_NAT_500_TO_50_KEY, 500, 50, natRuleName2);
+    EXIT_ON_ERROR(AddNatRule);
 
-    // Фильтр для этого правила NAT
-    result = AddFilterForNATRule(
-        engine,
-        &FILTER_KEY_500_TO_50,
-        500, // Порт, который будет проверять фильтр
-        &NAT_RULE_KEY_500_TO_50,
-        &SUBLAYER_KEY_PORT_REDIRECT
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_ALREADY_EXISTS) {
-        wcout << L"Ошибка при добавлении фильтра для NAT 500->50: 0x" << hex << result << endl;
-        goto CLEANUP;
-    }
-    wcout << L"Фильтр для NAT 500->50 добавлен." << endl;
+    // --- Keep the engine open for demonstration purposes ---
+    // In a real application, you might have logic to handle when to uninstall.
+    printf("NAT rules installed. Press Enter to uninstall...\n");
+    cin.get();
 
+    // --- Uninstall Sublayers and Rules ---
+    // Delete NAT rules first
+    printf("Deleting NAT rules...\n");
 
-    wcout << L"Перенаправление портов успешно настроено." << endl;
-
-    // Здесь можно добавить код для ожидания, если нужно, чтобы правила действовали
-    // Например, cin.get();
-
-    // 3. Удаление правил NAT и фильтров (если нужно)
-    // Раскомментируйте следующий блок, если хотите удалить правила при завершении.
-    /*
-    wcout << L"Удаление правил NAT и фильтров..." << endl;
-
-    result = RemoveFilterForNATRule(engine, &FILTER_KEY_4500_TO_450);
+    // Delete rule for 4500 to 450
+    result = DeleteNatRule(engine, &SUBLAYER_NAT_4500_TO_450_KEY, 4500, natRuleName1);
     if (result != ERROR_SUCCESS && result != FWP_E_FILTER_NOT_FOUND) {
-        wcout << L"Ошибка при удалении фильтра для NAT 4500->450: 0x" << hex << result << endl;
-    } else {
-        wcout << L"Фильтр для NAT 4500->450 удален." << endl;
+        printf("Error deleting NAT rule for 4500->450: 0x%08x\n", result);
+    }
+    else {
+        printf("NAT rule for 4500->450 deleted or not found.\n");
     }
 
-    result = RemovePortRedirectNATRule(engine, &NAT_RULE_KEY_4500_TO_450);
-    if (result != ERROR_SUCCESS && result != FWP_E_NAT_ENTRY_NOT_FOUND) {
-        wcout << L"Ошибка при удалении правила NAT 4500->450: 0x" << hex << result << endl;
-    } else {
-        wcout << L"Правило NAT 4500->450 удалено." << endl;
-    }
-
-    result = RemoveFilterForNATRule(engine, &FILTER_KEY_500_TO_50);
+    // Delete rule for 500 to 50
+    result = DeleteNatRule(engine, &SUBLAYER_NAT_500_TO_50_KEY, 500, natRuleName2);
     if (result != ERROR_SUCCESS && result != FWP_E_FILTER_NOT_FOUND) {
-        wcout << L"Ошибка при удалении фильтра для NAT 500->50: 0x" << hex << result << endl;
-    } else {
-        wcout << L"Фильтр для NAT 500->50 удален." << endl;
+        printf("Error deleting NAT rule for 500->50: 0x%08x\n", result);
+    }
+    else {
+        printf("NAT rule for 500->50 deleted or not found.\n");
     }
 
-    result = RemovePortRedirectNATRule(engine, &NAT_RULE_KEY_500_TO_50);
-    if (result != ERROR_SUCCESS && result != FWP_E_NAT_ENTRY_NOT_FOUND) {
-        wcout << L"Ошибка при удалении правила NAT 500->50: 0x" << hex << result << endl;
-    } else {
-        wcout << L"Правило NAT 500->50 удалено." << endl;
-    }
+    // Uninstall sublayers
+    result = Uninstall(&PROVIDER_KEY, &SUBLAYER_NAT_4500_TO_450_KEY);
+    EXIT_ON_ERROR(Uninstall);
 
-    wcout << L"Перенаправление портов удалено." << endl;
-    */
+    result = Uninstall(&PROVIDER_KEY, &SUBLAYER_NAT_500_TO_50_KEY);
+    EXIT_ON_ERROR(Uninstall);
 
-    // 4. Удаление провайдера и подслоя (если нужно)
-    // Раскомментируйте следующий блок, если хотите удалить провайдер/подслой.
-    /*
-    wcout << L"Удаление провайдера и подслоя..." << endl;
-    result = UninstallProviderAndSublayer(
-        &PROVIDER_KEY,
-        &SUBLAYER_KEY_PORT_REDIRECT
-    );
-    if (result != ERROR_SUCCESS && result != FWP_E_PROVIDER_NOT_FOUND && result != FWP_E_SUBLAYER_NOT_FOUND) {
-        wcout << L"Ошибка при удалении провайдера/подслоя: 0x" << hex << result << endl;
-    } else {
-        wcout << L"Провайдер и подслой удалены." << endl;
-    }
-    */
+    printf("NAT rules and sublayers uninstalled successfully.\n");
 
 CLEANUP:
-    if (engine) {
+    if (engine)
+    {
         FwpmEngineClose0(engine);
     }
 }
